@@ -4,10 +4,21 @@ from git import GitCommandError, Repo
 from py._path.local import LocalPath
 from pytest import raises
 
-from databooks.git_utils import ConflictFile, get_conflict_blobs, get_repo
+from databooks.data_models.cell import BaseCell, CellMetadata
+from databooks.data_models.notebook import NotebookMetadata
+from databooks.git_utils import (
+    ChangeType,
+    ConflictFile,
+    Contents,
+    DiffContents,
+    get_conflict_blobs,
+    get_nb_diffs,
+    get_repo,
+)
+from tests.test_data_models.test_notebook import TestJupyterNotebook
 
 
-def init_repo_conflicts(
+def init_repo_diff(
     tmpdir: LocalPath,
     filename: Path,
     contents_main: str,
@@ -42,9 +53,6 @@ def init_repo_conflicts(
     git_repo.git.add(filename)
     git_repo.git.commit("-m", commit_message_main)
 
-    with raises(GitCommandError):
-        git_repo.git.merge("other")  # merge fails and raises error due to conflict
-
     return git_repo
 
 
@@ -60,7 +68,7 @@ def test_get_repo() -> None:
 def test_get_conflict_blobs(tmpdir: LocalPath) -> None:
     """Return `databooks.git_utils.ConflctFile` from git merge conflict."""
     filepath = Path("hello.txt")
-    git_repo = init_repo_conflicts(
+    git_repo = init_repo_diff(
         tmpdir=tmpdir,
         filename=filepath,
         contents_main="HELLO EVERYONE!",
@@ -68,6 +76,8 @@ def test_get_conflict_blobs(tmpdir: LocalPath) -> None:
         commit_message_main="Commit message from main",
         commit_message_other="Commit message from other",
     )
+    with raises(GitCommandError):
+        git_repo.git.merge("other")  # merge fails and raises error due to conflict
 
     assert isinstance(git_repo.working_dir, (Path, str))
 
@@ -82,5 +92,49 @@ def test_get_conflict_blobs(tmpdir: LocalPath) -> None:
     assert conflict.first_log.endswith("Commit message from main")
     assert conflict.last_log.endswith("Commit message from other")
 
-    assert conflict.first_contents == "HELLO EVERYONE!"
-    assert conflict.last_contents == "hello world"
+    assert conflict.first_contents == b"HELLO EVERYONE!"
+    assert conflict.last_contents == b"hello world"
+
+
+def test_get_nb_diffs(tmpdir: LocalPath) -> None:
+    """Get the diffs for notebooks."""
+    notebook_main = TestJupyterNotebook().jupyter_notebook
+    notebook_other = TestJupyterNotebook().jupyter_notebook
+
+    notebook_main.metadata = NotebookMetadata(
+        kernelspec=dict(
+            display_name="different_kernel_display_name", name="kernel_name"
+        ),
+        field_to_remove=["Field to remove"],
+        another_field_to_remove="another field",
+    )
+    extra_cell = BaseCell(
+        cell_type="raw",
+        metadata=CellMetadata(random_meta=["meta"]),
+        source="extra",
+    )
+    notebook_other.cells = notebook_other.cells + [extra_cell]
+
+    nb_filepath = Path("test_notebook.ipynb")
+
+    git_repo = init_repo_diff(
+        tmpdir=tmpdir,
+        filename=nb_filepath,
+        contents_main=notebook_main.json(),
+        contents_other=notebook_other.json(),
+        commit_message_main="Commit message from main",
+        commit_message_other="Commit message from other",
+    )
+
+    assert get_nb_diffs(repo=git_repo, ref_remote="other") == [
+        DiffContents(
+            a=Contents(
+                path=Path("test_notebook.ipynb"), contents=notebook_main.json().encode()
+            ),
+            b=Contents(
+                path=Path("test_notebook.ipynb"),
+                contents=notebook_other.json().encode(),
+            ),
+            change_type=ChangeType.M,
+        )
+    ]
