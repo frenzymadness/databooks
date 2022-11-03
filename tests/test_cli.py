@@ -124,15 +124,7 @@ def test_meta__config(tmpdir: LocalPath) -> None:
 
     assert result.exit_code == 0
     assert nb_read != nb_write, "Notebook was not overwritten"
-    assert all(
-        c.outputs
-        == CellOutputs(
-            __root__=[
-                {"name": "stdout", "output_type": "stream", "text": ["test text\n"]}
-            ]
-        )
-        for c in nb_write.cells
-    )
+    assert all(c.outputs == CellOutputs(__root__=[]) for c in nb_write.cells)
     assert all(c.execution_count is not None for c in nb_write.cells)
 
     # Override config file arguments
